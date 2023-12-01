@@ -11,6 +11,8 @@ use std::{
     process::exit,
 };
 
+mod docker;
+
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -48,6 +50,23 @@ struct Args {
         default_value = "true"
     )]
     llamafile_server_download: bool,
+
+    #[arg(
+        short = 'b',
+        long,
+        env,
+        help = "Build docker image with the model",
+        default_value = "false"
+    )]
+    docker_build: bool,
+
+    #[arg(
+        long,
+        env,
+        help = "Image name for the docker image",
+        requires("docker_build")
+    )]
+    image_name: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -234,13 +253,9 @@ async fn main() {
     }
 
     info!("Located model");
+    let model_path = model_path.unwrap();
     debug!("Model path: {:?}", model_path);
 
-    if args.only_download {
-        return;
-    }
-
-    info!("Running the model");
     let llama_path = args
         .llamafile_server_path
         .clone()
@@ -260,6 +275,37 @@ async fn main() {
     }
     info!("Using llamafile-server at {}", &llama_path);
 
+    if args.docker_build {
+        info!("Building docker image");
+        let docker = match docker::Docker::new() {
+            Ok(docker) => docker,
+            Err(e) => crash(&format!("Failed to initialize docker: {}", e)),
+        };
+
+        let image_name = args.image_name.unwrap_or(
+            model_path
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string(),
+        );
+
+        match docker
+            .build_image(&image_name, vec![model_path.to_str().unwrap()], &llama_path)
+            .await
+        {
+            Ok(_) => info!("Built docker image"),
+            Err(e) => crash(&format!("Failed to build docker image: {}", e)),
+        }
+    }
+
+    if args.only_download {
+        return;
+    }
+
+    info!("Running the model");
+
     let runner = match Runner::new(
         args.llamafile_server_path
             .unwrap_or("./llamafile-server".to_string()),
@@ -268,7 +314,7 @@ async fn main() {
         Err(e) => crash(&format!("Failed to initialize llama: {}", e)),
     };
 
-    match runner.run(model_path.as_ref().unwrap()).await {
+    match runner.run(&model_path).await {
         Ok(_) => info!("Llama exited successfully"),
         Err(e) => crash(&format!("Llama exited with error: {}", e)),
     };
