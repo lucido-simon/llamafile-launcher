@@ -2,14 +2,17 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use futures_util::stream::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use std::{
     cmp::min,
-    fs::File,
+    fs::{File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     process::exit,
 };
+
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -36,6 +39,15 @@ struct Args {
 
     #[arg(short, long, env, help = "Path to llamafile-server")]
     llamafile_server_path: Option<String>,
+
+    #[arg(
+        short = 'D',
+        long,
+        env,
+        help = "Download llamafile-server if it doesn't exist",
+        default_value = "true"
+    )]
+    llamafile_server_download: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -167,7 +179,7 @@ impl Models {
             info!("Downloading {} to {}", url, filename);
             let filename = self.base_dir.join(filename);
             let filename = filename.to_str().unwrap();
-            from_url(url, filename).await?;
+            from_url(url, filename, false).await?;
         } else {
             info!("Found {} locally", filename);
         }
@@ -228,7 +240,26 @@ async fn main() {
         return;
     }
 
-    info!("Running llama");
+    info!("Running the model");
+    let llama_path = args
+        .llamafile_server_path
+        .clone()
+        .unwrap_or("./llamafile-server".to_string());
+
+    let exists = Path::new(&llama_path).exists();
+    if !exists && args.llamafile_server_download {
+        info!("Downloading llamafile-server");
+        if let Err(e) = download_llama_server(llama_path.clone()).await {
+            crash(&format!("Failed to download llamafile-server: {}", e));
+        }
+    } else if !exists {
+        crash(&format!(
+            "Llamafile-server path '{}' does not exist. Set the -D flag to download it",
+            llama_path
+        ));
+    }
+    info!("Using llamafile-server at {}", &llama_path);
+
     let runner = match Runner::new(
         args.llamafile_server_path
             .unwrap_or("./llamafile-server".to_string()),
@@ -243,12 +274,13 @@ async fn main() {
     };
 }
 
-async fn from_url(url: &str, filename: &str) -> Result<()> {
+async fn from_url(url: &str, filename: &str, set_executable: bool) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Reqwest setup
     let res = client
         .get(url)
+        .header("User-Agent", "reqwest")
         .send()
         .await
         .or(Err(anyhow::anyhow!(format!(
@@ -268,11 +300,25 @@ async fn from_url(url: &str, filename: &str) -> Result<()> {
 
     pb.set_message(format!("Downloading {}", &url));
 
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+
+    #[cfg(target_family = "unix")]
+    if set_executable {
+        options.mode(0o755);
+    }
+
+    options.open(filename).or(Err(anyhow::anyhow!(format!(
+        "Failed to open file '{}'",
+        &filename
+    ))))?;
+
     // download chunks
     let mut file = File::create(filename).or(Err(anyhow::anyhow!(format!(
         "Failed to create file '{}'",
         &filename
     ))))?;
+
     let mut downloaded: u64 = 0;
     let mut stream = res.bytes_stream();
 
@@ -297,11 +343,48 @@ async fn from_hf(model: &str, filename: &str, destination_file: &str) -> Result<
         model, filename
     );
 
-    from_url(&url, destination_file).await
+    from_url(&url, destination_file, false).await
+}
+
+async fn download_llama_server(file_path: String) -> Result<PathBuf> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get("https://api.github.com/repos/Mozilla-Ocho/llamafile/releases/latest")
+        .header("User-Agent", "reqwest")
+        .send()
+        .await?;
+
+    let release = res.json::<GithubRelease>().await?;
+
+    trace!("{:?}", &release);
+
+    let download_url = release
+        .assets
+        .into_iter()
+        .find(|asset| asset.name.starts_with("llamafile-server"))
+        .context("Couldn't find llamafile-server asset")?
+        .browser_download_url;
+
+    debug!("Downloading llamafile-server from {}", &download_url);
+
+    from_url(&download_url, &file_path, true).await?;
+
+    Ok(PathBuf::from(file_path))
 }
 
 fn crash(msg: &str) -> ! {
     error!("{}", msg);
     error!("Exiting");
     exit(1);
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct GithubRelease {
+    assets: Vec<GithubAsset>,
 }
