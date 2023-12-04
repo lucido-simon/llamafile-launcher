@@ -2,6 +2,7 @@ use anyhow::Result;
 use flate2::{write::GzEncoder, Compression};
 use futures_util::StreamExt;
 use log::{debug, error, info};
+use std::path::Path;
 use tar::Header;
 
 pub(crate) struct Docker {
@@ -17,8 +18,8 @@ impl Docker {
     pub async fn build_image(
         &self,
         image_name: &str,
-        model_path: Vec<&str>,
-        llama_path: &str,
+        model_path: Vec<&Path>,
+        llama_path: &Path,
     ) -> Result<()> {
         info!("Building image: {}", image_name);
         let dockerfile = self.dockerfile(&model_path);
@@ -49,7 +50,7 @@ impl Docker {
         Ok(())
     }
 
-    fn dockerfile(&self, models_path: &[&str]) -> String {
+    fn dockerfile(&self, models_path: &[&Path]) -> String {
         let mut dockerfile = String::from(
             r#"
 FROM debian:bullseye-slim AS final
@@ -81,8 +82,8 @@ ENTRYPOINT ["/bin/sh", "/usr/src/app/llamafile-server", "-m", "/usr/src/app/mode
     fn tarball(
         &self,
         dockerfile: String,
-        models_path: Vec<&str>,
-        llama_path: &str,
+        models_path: Vec<&Path>,
+        llama_path: &Path,
     ) -> Result<Vec<u8>> {
         let enc = GzEncoder::new(Vec::new(), Compression::new(0));
 
@@ -101,7 +102,7 @@ ENTRYPOINT ["/bin/sh", "/usr/src/app/llamafile-server", "-m", "/usr/src/app/mode
         tarball.append_data(&mut header, "./Dockerfile", dockerfile.as_bytes())?;
 
         for (i, model_path) in models_path.iter().enumerate() {
-            debug!("Appending model-{} from {}..", i, model_path);
+            debug!("Appending model-{} from {}..", i, model_path.display());
             tarball.append_path_with_name(model_path, &format!("./model-{}", i))?;
         }
 

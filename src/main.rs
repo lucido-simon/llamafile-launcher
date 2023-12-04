@@ -180,7 +180,7 @@ impl Models {
             model_dir.push(model);
             std::fs::create_dir_all(&model_dir)?;
             model_dir.push(filename);
-            from_hf(model, filename, model_dir.to_str().unwrap()).await?;
+            from_hf(model, filename, &model_dir).await?;
         } else {
             info!("Found {}/{} locally", model, filename);
         }
@@ -197,8 +197,7 @@ impl Models {
         if !self.exists(filename) {
             info!("Downloading {} to {}", url, filename);
             let filename = self.base_dir.join(filename);
-            let filename = filename.to_str().unwrap();
-            from_url(url, filename, false).await?;
+            from_url(url, &filename, false).await?;
         } else {
             info!("Found {} locally", filename);
         }
@@ -261,19 +260,20 @@ async fn main() {
         .clone()
         .unwrap_or("./llamafile-server".to_string());
 
-    let exists = Path::new(&llama_path).exists();
+    let llama_path = Path::new(&llama_path);
+    let exists = llama_path.exists();
     if !exists && args.llamafile_server_download {
         info!("Downloading llamafile-server");
-        if let Err(e) = download_llama_server(llama_path.clone()).await {
+        if let Err(e) = download_llamafile_release(llama_path, "llamafile-server").await {
             crash(&format!("Failed to download llamafile-server: {}", e));
         }
     } else if !exists {
         crash(&format!(
             "Llamafile-server path '{}' does not exist. Set the -D flag to download it",
-            llama_path
+            llama_path.display()
         ));
     }
-    info!("Using llamafile-server at {}", &llama_path);
+    info!("Using llamafile-server at {}", llama_path.display());
 
     if args.docker_build {
         info!("Building docker image");
@@ -292,7 +292,7 @@ async fn main() {
         );
 
         match docker
-            .build_image(&image_name, vec![model_path.to_str().unwrap()], &llama_path)
+            .build_image(&image_name, vec![&model_path], llama_path)
             .await
         {
             Ok(_) => info!("Built docker image"),
@@ -320,7 +320,7 @@ async fn main() {
     };
 }
 
-async fn from_url(url: &str, filename: &str, set_executable: bool) -> Result<()> {
+async fn from_url(url: &str, filename: &Path, set_executable: bool) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Reqwest setup
@@ -356,13 +356,13 @@ async fn from_url(url: &str, filename: &str, set_executable: bool) -> Result<()>
 
     options.open(filename).or(Err(anyhow::anyhow!(format!(
         "Failed to open file '{}'",
-        &filename
+        &filename.display()
     ))))?;
 
     // download chunks
     let mut file = File::create(filename).or(Err(anyhow::anyhow!(format!(
         "Failed to create file '{}'",
-        &filename
+        &filename.display()
     ))))?;
 
     let mut downloaded: u64 = 0;
@@ -379,11 +379,11 @@ async fn from_url(url: &str, filename: &str, set_executable: bool) -> Result<()>
         pb.set_position(new);
     }
 
-    pb.finish_with_message(format!("Downloaded {} to {}", &url, &filename));
+    pb.finish_with_message(format!("Downloaded {} to {}", &url, &filename.display()));
     Ok(())
 }
 
-async fn from_hf(model: &str, filename: &str, destination_file: &str) -> Result<()> {
+async fn from_hf(model: &str, filename: &str, destination_file: &Path) -> Result<()> {
     let url = format!(
         "https://huggingface.co/{}/resolve/main/{}?download=true",
         model, filename
@@ -392,7 +392,10 @@ async fn from_hf(model: &str, filename: &str, destination_file: &str) -> Result<
     from_url(&url, destination_file, false).await
 }
 
-async fn download_llama_server(file_path: String) -> Result<PathBuf> {
+async fn download_llamafile_release(
+    file_path: &Path,
+    release_starts_with: &str,
+) -> Result<PathBuf> {
     let client = reqwest::Client::new();
     let res = client
         .get("https://api.github.com/repos/Mozilla-Ocho/llamafile/releases/latest")
@@ -407,13 +410,13 @@ async fn download_llama_server(file_path: String) -> Result<PathBuf> {
     let download_url = release
         .assets
         .into_iter()
-        .find(|asset| asset.name.starts_with("llamafile-server"))
-        .context("Couldn't find llamafile-server asset")?
+        .find(|asset| asset.name.starts_with(release_starts_with))
+        .context(format!("Couldn't find {} asset", release_starts_with))?
         .browser_download_url;
 
-    debug!("Downloading llamafile-server from {}", &download_url);
+    debug!("Downloading {} from {}", release_starts_with, &download_url);
 
-    from_url(&download_url, &file_path, true).await?;
+    from_url(&download_url, file_path, true).await?;
 
     Ok(PathBuf::from(file_path))
 }
