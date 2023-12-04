@@ -12,9 +12,12 @@ use std::{
 };
 
 mod docker;
+mod llamafile_builder;
 
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::OpenOptionsExt;
+
+use crate::llamafile_builder::LlamafileBuilder;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -22,6 +25,9 @@ use std::os::unix::fs::OpenOptionsExt;
 struct Args {
     #[clap(flatten)]
     args: ModelSource,
+
+    #[clap(flatten)]
+    build_args: BuildArgs,
 
     #[arg(
         short = 'd',
@@ -68,6 +74,42 @@ struct Args {
         requires("docker_build")
     )]
     image_name: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+#[group(required = true, multiple = true)]
+struct BuildArgs {
+    #[arg(
+        short = 'B',
+        long,
+        env,
+        help = "Build llamafile with embedded model",
+        default_value = "false",
+        requires("llamafile_output")
+    )]
+    build_llamafile: bool,
+
+    #[arg(
+        short = 'o',
+        long,
+        env,
+        help = "Output file of llamafile build",
+        requires("build_llamafile"),
+        conflicts_with("llamafile_output_dir")
+    )]
+    llamafile_output: Option<String>,
+
+    #[arg(
+        long = "output-dir",
+        env,
+        help = "Output folder of all llamafile builds",
+        requires("build_llamafile"),
+        conflicts_with("llamafile_output")
+    )]
+    llamafile_output_dir: Option<String>,
+
+    #[arg(long, env, help = "Path to zipalign")]
+    zipalign_path: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -301,6 +343,28 @@ async fn main() {
         }
     }
 
+    if args.build_args.build_llamafile {
+        info!("Building llamafile");
+        let llamafile_builder = match LlamafileBuilder::new(
+            args.build_args
+                .llamafile_output_dir
+                .as_ref()
+                .map(From::from),
+            args.llamafile_server_path.as_ref().map(From::from),
+            args.build_args.zipalign_path.as_ref().map(From::from),
+        )
+        .await
+        {
+            Ok(llamafile_builder) => llamafile_builder,
+            Err(e) => crash(&format!("Failed to initialize llamafile builder: {}", e)),
+        };
+
+        let path: Option<PathBuf> = args.build_args.llamafile_output.as_ref().map(From::from);
+
+        match llamafile_builder.build(&[&model_path], path).await {
+            Ok(_) => info!("Built llamafile"),
+            Err(e) => crash(&format!("Failed to build llamafile: {}", e)),
+        }
     }
 
     if args.execute {
