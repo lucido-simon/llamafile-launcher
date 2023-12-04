@@ -32,12 +32,13 @@ struct Args {
     model_dir: Option<String>,
 
     #[arg(
+        short = 'e',
         long,
         default_value = "false",
         env,
-        help = "Only download the model, don't run llama"
+        help = "Execute the model"
     )]
-    only_download: bool,
+    execute: bool,
 
     #[arg(short, long, env, help = "Path to llamafile-server")]
     llamafile_server_path: Option<String>,
@@ -300,24 +301,24 @@ async fn main() {
         }
     }
 
-    if args.only_download {
-        return;
     }
 
-    info!("Running the model");
+    if args.execute {
+        info!("Running the model");
 
-    let runner = match Runner::new(
-        args.llamafile_server_path
-            .unwrap_or("./llamafile-server".to_string()),
-    ) {
-        Ok(runner) => runner,
-        Err(e) => crash(&format!("Failed to initialize llama: {}", e)),
-    };
+        let runner = match Runner::new(
+            args.llamafile_server_path
+                .unwrap_or("./llamafile-server".to_string()),
+        ) {
+            Ok(runner) => runner,
+            Err(e) => crash(&format!("Failed to initialize llama: {}", e)),
+        };
 
-    match runner.run(&model_path).await {
-        Ok(_) => info!("Llama exited successfully"),
-        Err(e) => crash(&format!("Llama exited with error: {}", e)),
-    };
+        match runner.run(&model_path).await {
+            Ok(_) => info!("Llama exited successfully"),
+            Err(e) => crash(&format!("Llama exited with error: {}", e)),
+        };
+    }
 }
 
 async fn from_url(url: &str, filename: &Path, set_executable: bool) -> Result<()> {
