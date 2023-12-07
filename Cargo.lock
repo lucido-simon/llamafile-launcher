@@ -870,6 +870,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bollard",
+ "bytes",
  "clap",
  "env_logger",
  "flate2",

@@ -2,8 +2,11 @@ use anyhow::{Context, Result};
 use log::{debug, info};
 use std::path::{Path, PathBuf};
 
+use crate::http_client::HttpClient;
+
 pub struct Models {
     base_dir: PathBuf,
+    http_client: HttpClient,
 }
 
 impl Models {
@@ -23,6 +26,7 @@ impl Models {
 
         Ok(Self {
             base_dir: PathBuf::from(basedir),
+            http_client: HttpClient::new(),
         })
     }
 
@@ -34,14 +38,21 @@ impl Models {
         self.exists(format!("{}/{}", model, filename).as_str())
     }
 
-    pub async fn get_hf_model(&self, model: &str, filename: &str) -> Result<PathBuf> {
+    pub async fn get_hf_model(&mut self, model: &str, filename: &str) -> Result<PathBuf> {
         if !self.exists_hf(model, filename) {
             info!("Downloading {}/{}", model, filename);
             let mut model_dir = self.base_dir.clone();
             model_dir.push(model);
             std::fs::create_dir_all(&model_dir)?;
             model_dir.push(filename);
-            super::from_hf(model, filename, &model_dir).await?;
+            let url = format!(
+                "https://huggingface.co/{}/resolve/main/{}?download=true",
+                model, filename
+            );
+
+            self.http_client
+                .download_to(&url, &model_dir, false)
+                .await?
         } else {
             info!("Found {}/{} locally", model, filename);
         }
@@ -49,7 +60,7 @@ impl Models {
         Ok(self.base_dir.join(model).join(filename))
     }
 
-    pub async fn get_model(&self, url: &str) -> Result<PathBuf> {
+    pub async fn get_model(&mut self, url: &str) -> Result<PathBuf> {
         let filename = url
             .split('/')
             .last()
@@ -58,7 +69,7 @@ impl Models {
         if !self.exists(filename) {
             info!("Downloading {} to {}", url, filename);
             let filename = self.base_dir.join(filename);
-            super::from_url(url, &filename, false).await?;
+            self.http_client.download_to(url, &filename, false).await?;
         } else {
             info!("Found {} locally", filename);
         }

@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 bollard = { version = "0.15.0", features = ["buildkit"] }
+bytes = "1.5.0"
 clap = { version = "4.4.10", features = ["derive", "env"] }
 env_logger = "0.10.1"
 flate2 = "1.0.28"
